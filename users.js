@@ -1,32 +1,69 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const store = require('./store');
 
 // Личные данные КАЖДОГО пользователя бота.
 // Ключ — telegram id пользователя. Новый пользователь получает пустую
 // карточку и логинится своим аккаунтом.
+//
+// Хранение: см. комментарий в config.js — Upstash Redis либо локальный файл.
 
 const file = path.join(config.VOLUME_DIR, 'users.json');
+const REMOTE_KEY = 'tapbot:users';
 
-let data = { users: {} };
+// Объект не переприсваиваем — только мутируем data.users, чтобы ссылка,
+// которую другие файлы получили через require(), оставалась актуальной.
+const data = { users: {} };
 
-try {
-  if (fs.existsSync(file)) {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (parsed && typeof parsed === 'object') data = parsed;
+function loadLocal() {
+  try {
+    if (fs.existsSync(file)) {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (e) {
+    console.error('users.json битый, начинаю с пустого:', e.message);
   }
-} catch (e) {
-  console.error('users.json битый, начинаю с пустого:', e.message);
-  data = { users: {} };
+  return { users: {} };
 }
 
-if (!data.users || typeof data.users !== 'object') data.users = {};
-
-function save() {
+function saveLocal() {
   try {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
   } catch (e) {
-    console.error('users save error:', e.message);
+    console.error('users save (файл) error:', e.message);
+  }
+}
+
+// Нужно вызвать и дождаться (await) ДО первого обращения к users —
+// в index.js это сделано первым делом в main(), сразу после config.init().
+async function init() {
+  let loaded;
+  if (store.enabled) {
+    try {
+      const raw = await store.get(REMOTE_KEY);
+      loaded = raw ? JSON.parse(raw) : { users: {} };
+    } catch (e) {
+      console.error('users: не смог прочитать из Upstash, начинаю с пустого:', e.message);
+      loaded = { users: {} };
+    }
+  } else {
+    loaded = loadLocal();
+  }
+  if (!loaded.users || typeof loaded.users !== 'object') loaded.users = {};
+  Object.assign(data.users, loaded.users);
+}
+
+async function save() {
+  if (store.enabled) {
+    try {
+      await store.set(REMOTE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('users save (Upstash) error:', e.message);
+    }
+  } else {
+    saveLocal();
   }
 }
 
@@ -95,4 +132,4 @@ function all() {
   return Object.values(data.users).map(normalize);
 }
 
-module.exports = { data, save, has, get, create, ensure, remove, all, file };
+module.exports = { data, save, init, has, get, create, ensure, remove, all, file };

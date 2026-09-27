@@ -16,6 +16,11 @@ const { SessionManager } = require('./session');
 const setupBot = require('./bot');
 
 async function main() {
+  // ВАЖНО: до этого момента config.data/users.* ещё не заполнены —
+  // init() тянет данные из Upstash Redis (если настроен) либо с диска.
+  await config.init();
+  await users.init();
+
   if (!config.data.botToken) {
     console.error('Не задан botToken (config.json или переменная BOT_TOKEN)');
     process.exit(1);

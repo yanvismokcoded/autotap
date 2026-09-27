@@ -21,11 +21,30 @@
 
 Если что-то из этого понадобится обратно — вернуть несложно, файлы `userbot.js`, `tapper.js`, `parser.js` не менялись и совместимы с исходным проектом.
 
+## Хранение данных
+
+Нужен Node.js 18+ (используется глобальный `fetch`).
+
+Бот хранит `config.json` и `users.json` (там же лежат сессии всех аккаунтов)
+либо на диске, либо в Upstash Redis — выбирается автоматически:
+
+- **Есть диск** (свой сервер, Railway с volume и т.п.): просто задай
+  `CONFIG_DIR` (или ничего не задавай — по умолчанию `/app/data`).
+- **Нет диска** (Render Free и подобные): заведи бесплатную базу на
+  [upstash.com](https://upstash.com) (Redis, Free tier), скопируй со страницы
+  базы **REST URL** и **REST TOKEN**, и задай их как переменные окружения:
+  `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`. Как только они заданы —
+  файл на диске вообще не используется, всё живёт в Upstash и переживает
+  рестарты/редеплои.
+
 ## Запуск
+
+Переменные окружения (или `config.json` на основе `config.example.json`):
+`API_ID`, `API_HASH`, `BOT_TOKEN`, `OWNER_ID` (необязательно),
+и при работе без диска — `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`.
+
 ```
 npm install
-cp config.example.json /app/data/config.json   # или используйте переменные окружения
-# отредактируйте apiId/apiHash/botToken (или задайте API_ID/API_HASH/BOT_TOKEN/OWNER_ID/CONFIG_DIR через env)
 npm start
 ```
 
