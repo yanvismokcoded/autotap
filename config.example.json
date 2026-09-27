@@ -1,0 +1,8 @@
+{
+  "apiId": 12345,
+  "apiHash": "your_api_hash_from_my.telegram.org",
+  "botToken": "your_bot_token_from_botfather",
+  "ownerId": null,
+  "defaultVotes": 21,
+  "pendingKeys": {}
+}

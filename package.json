@@ -1,0 +1,13 @@
+{
+  "name": "tap-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "big-integer": "^1.6.52",
+    "telegram": "^2.19.0",
+    "telegraf": "^4.16.3"
+  }
+}
