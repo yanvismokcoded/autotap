@@ -128,7 +128,9 @@ class Userbot {
         let res = await this.client.invoke(new Api.auth.ExportLoginToken(args));
 
         if (res instanceof Api.auth.LoginTokenMigrateTo) {
+          console.log(`[qr] аккаунт на другом DC, переключаюсь на DC${res.dcId}`);
           await this.client._switchDC(res.dcId);
+          console.log('[qr] DC переключён, импортирую токен');
           res = await this.client.invoke(new Api.auth.ImportLoginToken({ token: res.token }));
         }
 

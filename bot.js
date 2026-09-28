@@ -206,7 +206,7 @@ function setupBot(config, users, sessions) {
       }
     } catch (e) {
       await dropQr();
-      console.error('qr login error:', safeErr(e));
+      console.error('qr login error:', String((e && e.stack) || e).replace(/bot\d+:[\w-]+/g, 'bot<token>'));
       await say(`Ошибка QR-входа: ${safeErr(e)}`);
     } finally {
       qrFlows.delete(uid);
