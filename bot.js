@@ -1,5 +1,6 @@
 const { Telegraf } = require('telegraf');
 const crypto = require('crypto');
+const QRCode = require('qrcode');
 const parser = require('./parser');
 
 // Одноразовый ключ вида "A1B2-C3D4"
@@ -43,7 +44,8 @@ function helpText(isOwner) {
     (isOwner ? '👑 Владелец:\n/genkey — выдать ключ регистрации\n/users — список пользователей\n/revoke <id> — удалить пользователя\n/login_code — показать последние сообщения из служебного чата Telegram (777000, до 20 шт.)\n\n' : '') +
     '🔑 Аккаунт:\n' +
     '/login <номер> — вход в свой Telegram (например /login +79990000000)\n' +
-    '/code <код> — код из Telegram\n' +
+    '/login_qr — вход по QR-коду (без SMS; сканировать с другого устройства)\n' +
+    '/cancel — отменить вход по QR\n' +    '/code <код> — код из Telegram\n' +
     '/resend_code — код не пришёл? запросить его заново другим способом (обычно переключает на SMS)\n' +
     '/password <пароль> — 2FA\n' +
     '/logout — выйти из аккаунта\n' +
@@ -90,6 +92,68 @@ function setupBot(config, users, sessions) {
   // удобные хелперы: данные и сессия ТЕКУЩЕГО пользователя
   const U = (ctx) => users.get(ctx.from.id);
   const S = (ctx) => sessions.get(ctx.from.id);
+
+  // активные QR-входы: userId -> { cancelled, msgId }
+  const qrFlows = new Map();
+
+  // Фоновый процесс QR-входа. ВАЖНО: не await'им его из обработчика команды —
+  // Telegraf обрабатывает апдейты по очереди (и режет обработчик по таймауту 90 с),
+  // долгий обработчик заблокировал бы и /cancel, и /password.
+  async function runQrLogin(uid, chatId, flow) {
+    const s = sessions.get(uid);
+    const say = (text) => bot.telegram.sendMessage(chatId, text).catch(() => {});
+    const dropQr = async () => {
+      if (flow.msgId) {
+        await bot.telegram.deleteMessage(chatId, flow.msgId).catch(() => {});
+        flow.msgId = null;
+      }
+    };
+
+    try {
+      const result = await s.userbot.qrLogin({
+        isCancelled: () => flow.cancelled,
+        onQr: async (url) => {
+          const png = await QRCode.toBuffer(url, { width: 512, margin: 2 });
+          const caption =
+            '📷 Отсканируйте QR с ДРУГОГО устройства:\n' +
+            'Telegram → Настройки → Устройства → Подключить устройство.\n' +
+            'QR обновляется каждые ~30 сек. Отмена: /cancel';
+          if (flow.msgId) {
+            try {
+              await bot.telegram.editMessageMedia(
+                chatId, flow.msgId, undefined,
+                { type: 'photo', media: { source: png }, caption }
+              );
+              return;
+            } catch (e) {
+              await dropQr();
+            }
+          }
+          const m = await bot.telegram.sendPhoto(chatId, { source: png }, { caption });
+          flow.msgId = m.message_id;
+        }
+      });
+
+      await dropQr();
+
+      if (result.status === 'ok') {
+        await s.start();
+        await say('✅ Аккаунт подключён по QR. Добавьте каналы для тапов: /add_channel');
+      } else if (result.status === 'twofa') {
+        await say('🔐 QR принят, но включена 2FA. Введите пароль: /password <пароль>');
+      } else if (result.status === 'cancelled') {
+        await say('QR-вход отменён.');
+      } else {
+        await say('⌛ Время на вход по QR вышло. Повторить: /login_qr');
+      }
+    } catch (e) {
+      await dropQr();
+      console.error('qr login error:', e);
+      await say(`Ошибка QR-входа: ${e.errorMessage || e.message}`);
+    } finally {
+      qrFlows.delete(uid);
+    }
+  }
 
   function clientOf(ctx) {
     const s = S(ctx);
@@ -196,6 +260,33 @@ function setupBot(config, users, sessions) {
     }
   });
 
+  bot.command('login_qr', async (ctx) => {
+    const uid = String(ctx.from.id);
+    if (qrFlows.has(uid)) return ctx.reply('QR-вход уже запущен. Отменить: /cancel');
+
+    try {
+      const s = S(ctx);
+      await s.userbot.connect();
+      if (await s.userbot.isAuthorized()) {
+        return ctx.reply('Аккаунт уже подключён. Чтобы войти другим — сначала /logout');
+      }
+    } catch (e) {
+      console.error('login_qr error:', e);
+      return ctx.reply(`Ошибка: ${e.errorMessage || e.message}`);
+    }
+
+    const flow = { cancelled: false, msgId: null };
+    qrFlows.set(uid, flow);
+    runQrLogin(uid, ctx.chat.id, flow); // намеренно без await
+  });
+
+  bot.command('cancel', (ctx) => {
+    const flow = qrFlows.get(String(ctx.from.id));
+    if (!flow) return ctx.reply('Нечего отменять.');
+    flow.cancelled = true;
+    S(ctx).userbot.wakeQr(); // сообщение об отмене отправит сам процесс входа
+  });
+
   bot.command('resend_code', async (ctx) => {
     try {
       const s = S(ctx);
@@ -240,6 +331,8 @@ function setupBot(config, users, sessions) {
 
   bot.command('logout', async (ctx) => {
     try {
+      const flow = qrFlows.get(String(ctx.from.id));
+      if (flow) flow.cancelled = true;
       const s = S(ctx);
       await s.stop();
       await s.userbot.logout();
