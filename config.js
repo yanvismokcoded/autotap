@@ -22,6 +22,8 @@ const DEFAULTS = {
   ownerId: null,
   // значение по умолчанию для НОВОГО пользователя
   defaultVotes: 21,
+  // новые функции тапа открыты всем (false — только владельцу, см. /beta)
+  betaOpen: false,
   pendingKeys: {}
 };
 
