@@ -41,7 +41,33 @@ class Userbot {
 
   async sendCode(phone) {
     await this.connect();
-    const result = await this.client.sendCode({ apiId: this.apiId, apiHash: this.apiHash }, phone);
+    // Вызываем auth.SendCode напрямую: client.sendCode() из gramjs возвращает
+    // только { phoneCodeHash, isCodeViaApp } и прячет реальный способ доставки
+    // (result.type), а он нужен и для подсказки пользователю, и для диагностики.
+    let result;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = await this.client.invoke(new Api.auth.SendCode({
+          phoneNumber: phone,
+          apiId: this.apiId,
+          apiHash: this.apiHash,
+          settings: new Api.CodeSettings({})
+        }));
+        break;
+      } catch (e) {
+        if (e.errorMessage === 'AUTH_RESTART' && attempt === 0) continue;
+        throw e;
+      }
+    }
+    if (!result || !result.phoneCodeHash) {
+      throw new Error('Telegram не вернул код (ответ: ' + (result && result.className) + ')');
+    }
+    console.log(
+      `[login] sendCode ${phone.slice(0, 4)}***${phone.slice(-2)}:`,
+      'type =', result.type && result.type.className,
+      '| next =', result.nextType && result.nextType.className,
+      '| timeout =', result.timeout
+    );
     this.phoneCodeHash = result.phoneCodeHash;
     this.user.phone = phone;
     this.users.save();
@@ -58,6 +84,11 @@ class Userbot {
       phoneNumber: this.user.phone,
       phoneCodeHash: this.phoneCodeHash
     }));
+    console.log(
+      '[login] resendCode:',
+      'type =', result.type && result.type.className,
+      '| next =', result.nextType && result.nextType.className
+    );
     this.phoneCodeHash = result.phoneCodeHash;
     return result;
   }

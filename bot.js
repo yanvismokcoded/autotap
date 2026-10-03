@@ -10,17 +10,33 @@ function generateKey() {
   return `${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
 }
 
-// Куда Telegram реально доставил код входа (result.type.className из auth.SentCode)
+// Куда Telegram реально доставил код входа (result.type из auth.SentCode).
+// className в gramjs может приходить с префиксом "auth." — отбрасываем его.
 const SENT_CODE_WHERE = {
-  SentCodeTypeApp: 'в другое уже открытое приложение Telegram (телефон/десктоп с этим же аккаунтом) — придёт сообщением от Telegram',
+  SentCodeTypeApp: 'в другое уже открытое приложение Telegram с этим аккаунтом — ищите сообщение в служебном чате «Telegram»',
   SentCodeTypeSms: 'по SMS на телефон',
   SentCodeTypeCall: 'голосовым звонком на телефон',
   SentCodeTypeFlashCall: 'звонком-сбросом — код спрятан в номере звонившего',
   SentCodeTypeMissedCall: 'пропущенным звонком — код спрятан в номере звонившего',
-  SentCodeTypeEmailCode: 'на привязанную к аккаунту почту'
+  SentCodeTypeEmailCode: 'на привязанную к аккаунту почту',
+  SentCodeTypeFragmentSms: 'через Fragment (анонимный номер)',
+  SentCodeTypeFirebaseSms: 'через Firebase-SMS (такой способ работает только в официальных приложениях)',
+  SentCodeTypeSmsWord: 'по SMS (слово вместо цифр)',
+  SentCodeTypeSmsPhrase: 'по SMS (фраза вместо цифр)',
+  SentCodeTypeSetUpEmailRequired: 'Telegram требует сначала привязать почту — вход по коду недоступен'
 };
+// Способы, при которых код сторонний клиент (бот) получить не сможет
+const SENT_CODE_UNUSABLE = new Set(['SentCodeTypeFirebaseSms', 'SentCodeTypeSetUpEmailRequired']);
+
+function sentCodeName(t) {
+  return String((t && t.className) || '').split('.').pop();
+}
 function describeSentCode(result) {
-  return SENT_CODE_WHERE[result?.type?.className] || 'через Telegram';
+  const name = sentCodeName(result && result.type);
+  return SENT_CODE_WHERE[name] || (name ? `способом ${name}` : 'через Telegram');
+}
+function sentCodeUnusable(result) {
+  return SENT_CODE_UNUSABLE.has(sentCodeName(result && result.type));
 }
 
 // В тексте сетевых ошибок Telegraf/node-fetch виден URL вида .../bot<ТОКЕН>/метод —
@@ -308,9 +324,16 @@ function setupBot(config, users, sessions) {
       }
       const result = await s.userbot.sendCode(phone.startsWith('+') ? phone : '+' + phone);
       const where = describeSentCode(result);
+      if (sentCodeUnusable(result)) {
+        return ctx.reply(
+          `Telegram выбрал способ доставки, при котором код не получить: ${where}.\n` +
+          'Войдите по QR-коду: /login_qr'
+        );
+      }
       ctx.reply(
-        `Код отправлен: ${where}.\nВведите: /code <код>\n(можно с пробелами: /code 1 2 3 4 5)\n` +
-        'Если код так и не пришёл — попробуйте /resend_code, это запросит другой способ доставки (обычно SMS).'
+        `Код отправлен: ${where}.\nВведите, вставив пробелы между цифрами: /code 1 2 3 4 5\n` +
+        '(без пробелов Telegram считает код «слитым» и аннулирует его)\n' +
+        'Если код так и не пришёл — попробуйте /resend_code (запросит другой способ, обычно SMS) или войдите по QR: /login_qr'
       );
     } catch (e) {
       console.error('login error:', e);
