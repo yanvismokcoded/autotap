@@ -1,4 +1,4 @@
-const TG_LINK_RE = /(?:https?:\/\/)?(?:t\.me|telegram\.me)\/[^\s<>()\[\]"'«»]+/gi;
+const TG_LINK_RE = /(?:https?:\/\/)?(?:t\.me|telegram\.me)\/[^\s<>()\[\]"'«»*]+/gi;
 
 // Юзы, за которых бот никогда не тапает (чс). На поиск ссылок это не влияет —
 // ссылка на пост в этих же каналах обрабатывается как обычно.
@@ -89,6 +89,92 @@ function parseVzMessage(text, allowStarFormat = false) {
   return { link, username, count };
 }
 
+// ---------- несколько голосований в одном сообщении ----------
+
+// "ссылка*юз", "ссылка * @юз", "ссылка*юз1 & @юз2" — можно много штук подряд:
+//   ищем вз t.me/chan/12*user_one t.me/chan2/45*user_two
+const STAR_PAIR_SRC =
+  '((?:https?:\\/\\/)?(?:t\\.me|telegram\\.me)\\/[^\\s<>()\\[\\]"\'«»*]+)' +
+  '\\s*\\*\\s*@?([a-zA-Z0-9_]{5,})' +
+  '(?:\\s*&\\s*@([a-zA-Z0-9_]{5,}))?';
+
+function pickAllowed(u1, u2) {
+  if (!u2) return isBlacklisted(u1) ? null : u1;
+  const b1 = isBlacklisted(u1);
+  const b2 = isBlacklisted(u2);
+  if (!b1 && !b2) return `${u1} & @${u2}`;
+  if (b1 && !b2) return u2;
+  if (b2 && !b1) return u1;
+  return null;
+}
+
+function dedupe(items) {
+  const seen = new Set();
+  return items.filter((it) => {
+    const key = (it.link + '|' + it.username).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Только формат "ссылка*юз" (одна или несколько пар). Возвращает массив
+// { link, username, count: null }.
+function parseStarPairs(text) {
+  if (!text) return [];
+  const out = [];
+  for (const m of text.matchAll(new RegExp(STAR_PAIR_SRC, 'gi'))) {
+    if (NOT_POST_RE.test(m[1])) continue;
+    const username = pickAllowed(m[2], m[3]);
+    if (!username) continue;
+    out.push({ link: normalizeLink(m[1]), username, count: null });
+  }
+  return dedupe(out);
+}
+
+// Все голосования из сообщения:
+//  1) пары "ссылка*юз" — сколько бы их ни было;
+//  2) иначе — по одной на строку ("ссылка @юз" на каждой строке);
+//  3) иначе — как раньше: одна ссылка и один юз из всего текста.
+function parseVzMessages(text) {
+  if (!text) return [];
+
+  const stars = parseStarPairs(text);
+  if (stars.length) return stars;
+
+  const perLine = [];
+  for (const line of text.split(/\r?\n/)) {
+    const r = parseVzMessage(line);
+    if (r) perLine.push(r);
+  }
+  if (perLine.length >= 2) return dedupe(perLine);
+
+  const single = parseVzMessage(text);
+  return single ? [single] : [];
+}
+
+function isPostLink(link) {
+  return /t\.me\/c\/\d+\/\d+/i.test(link) || MSG_LINK_RE.test(link);
+}
+
+// Ссылка на пост в тексте (без юза) — для "сначала кидают пост".
+function parsePostLink(text) {
+  if (!text) return null;
+  const link = pickPostLink(findLinks(text));
+  return link && isPostLink(link) ? link : null;
+}
+
+// Сообщение, в котором только юз (без ссылок): "@юз", "юз: имя", "@а & @б"
+// или просто "имя".
+function parseUsernameOnly(text) {
+  if (!text) return null;
+  if (findLinks(text).length) return null;
+  const found = findUsername(text);
+  if (found) return found;
+  const bare = text.trim().match(/^@?([a-zA-Z][a-zA-Z0-9_]{4,31})$/);
+  return bare && !isBlacklisted(bare[1]) ? bare[1] : null;
+}
+
 // Ищет в тексте ссылку на сообщение в публичном чате.
 // Нужна для формата "вз? <ссылка на сообщение, где лежит пост и юз>".
 // Возвращает { peer, id, link } или null.
@@ -115,4 +201,7 @@ function messageToText(msg) {
   return text;
 }
 
-module.exports = { parseVzMessage, parseMessageLink, messageToText, isBlacklisted, BLACKLISTED_USERNAMES };
+module.exports = {
+  parseVzMessage, parseVzMessages, parseStarPairs, parsePostLink, parseUsernameOnly,
+  parseMessageLink, messageToText, isBlacklisted, BLACKLISTED_USERNAMES
+};
