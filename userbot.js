@@ -218,14 +218,25 @@ class Userbot {
     this.users.save();
   }
 
-  async isAuthorized() {
-    if (!this.client) return false;
+  // 'ok' — сессия жива; 'revoked' — Telegram её отозвал (нужен /login);
+  // 'error' — временный сбой (сеть/таймаут), сессию мёртвой считать нельзя.
+  async checkAuth() {
+    if (!this.client) return { status: 'revoked' };
     try {
       await this.client.getMe();
-      return true;
-    } catch {
-      return false;
+      return { status: 'ok' };
+    } catch (e) {
+      const m = e.errorMessage || e.message || '';
+      if (/AUTH_KEY_UNREGISTERED|SESSION_REVOKED|SESSION_EXPIRED|USER_DEACTIVATED|AUTH_KEY_INVALID|AUTH_KEY_DUPLICATED/.test(m)) {
+        return { status: 'revoked', error: m };
+      }
+      return { status: 'error', error: m };
     }
+  }
+
+  // Прежнее поведение для остальных мест в bot.js: boolean.
+  async isAuthorized() {
+    return (await this.checkAuth()).status === 'ok';
   }
 
   async logout() {
