@@ -14,6 +14,7 @@ class UserSession {
     this.userbot = new Userbot(user, config, users);
     this.tapper = null;
     this.handler = null;
+    this.eventBuilder = null;
     this.running = false;
     this.dialogsPrimedAt = 0;
   }
@@ -34,11 +35,8 @@ class UserSession {
     if (!this.user.session) throw new Error('Нет сессии — нужна авторизация /login');
 
     await this.userbot.connect();
-    const auth = await this.userbot.checkAuth();
-    if (auth.status !== 'ok') {
-      await this.userbot.disconnect();
-      if (auth.status === 'revoked') throw new Error('Сессия недействительна, нужна повторная авторизация /login');
-      throw new Error('Не удалось проверить сессию (сеть/таймаут Telegram): ' + auth.error);
+    if (!(await this.userbot.isAuthorized())) {
+      throw new Error('Сессия недействительна, нужна повторная авторизация /login');
     }
 
     this.tapper = new Tapper(this.client, this.user, this.users);
@@ -49,17 +47,24 @@ class UserSession {
     // вручную через /login_code. Никакой другой логики (вз-чаты, автопост,
     // предложения) в этом боте нет вообще.
     this.handler = (event) => this.onMessage(event).catch((e) => console.log('handler error', e.message));
-    this.client.addEventHandler(this.handler, new NewMessage({}));
+    // Фильтр func отсекает всё, кроме входящих из 777000, ДО вызова обработчика —
+    // остальные сообщения аккаунта не попадают в onMessage вообще.
+    this.eventBuilder = new NewMessage({
+      incoming: true,
+      func: (event) => String(event.chatId) === '777000'
+    });
+    this.client.addEventHandler(this.handler, this.eventBuilder);
     this.running = true;
 
     console.log(`[user ${this.user.id}] сессия запущена`);
   }
 
   async stop() {
-    if (this.handler && this.client) {
-      try { this.client.removeEventHandler(this.handler, new NewMessage({})); } catch {}
+    if (this.handler && this.client && this.eventBuilder) {
+      try { this.client.removeEventHandler(this.handler, this.eventBuilder); } catch {}
     }
     this.handler = null;
+    this.eventBuilder = null;
     this.running = false;
     await this.userbot.disconnect();
   }
@@ -150,29 +155,14 @@ class SessionManager {
 
   // Поднимает сессии всех, кто уже авторизован
   async startAll() {
-    const all = this.users.all();
-    const withSession = all.filter((u) => u.session);
-    const stats = { ok: 0, failed: 0 };
-
-    console.log(
-      `startAll: пользователей в базе ${all.length}, с сохранённой сессией ${withSession.length}, ` +
-      `без сессии (не прошли /login) ${all.length - withSession.length}`
-    );
-    for (const u of all) {
-      if (!u.session) console.log(`[user ${u.id}] пропуск: нет сессии (не выполнен /login)`);
-    }
-
-    for (const user of withSession) {
+    for (const user of this.users.all()) {
+      if (!user.session) continue;
       try {
         await this.get(user.id).start();
-        stats.ok++;
       } catch (e) {
-        stats.failed++;
         console.log(`[user ${user.id}] не удалось поднять сессию:`, e.message);
       }
     }
-
-    console.log(`startAll: поднято ${stats.ok}, с ошибкой ${stats.failed}, пропущено без сессии ${all.length - withSession.length}`);
   }
 }
 
